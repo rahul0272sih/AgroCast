@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgroCast - Panchayat Weather Downscaling & Advisory</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        #map { height: 320px; border-radius: 12px; }
+        .card-custom { border-radius: 12px; border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .highlight-val { font-size: 1.8rem; font-weight: bold; }
+    </style>
+</head>
+<body class="bg-light">
+
+    <nav class="navbar navbar-expand-lg navbar-dark bg-success shadow-sm mb-4">
+        <div class="container d-flex justify-content-between align-items-center">
+            <a class="navbar-brand fw-bold" href="#">🌱 AgroCast Portal</a>
+            <div class="d-flex gap-2 align-items-center">
+    <button id="userLoginBtn" class="btn btn-light btn-sm fw-bold" data-bs-toggle="modal" data-bs-target="#loginModal">
+        👤 Farmer Login
+    </button>
+    <button class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#feedbackModal">📍 Ground Weather Report</button>
+    <button id="langToggle" class="btn btn-light btn-sm fw-bold">🌐 Language: English</button>
+</div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="row g-4">
+            
+            <!-- Left Controls Panel -->
+            <div class="col-md-4">
+                <div class="card card-custom p-4 mb-4">
+                    <h5 class="fw-bold mb-3 text-success">Select Region & Crop</h5>
+                    
+                    <div class="mb-3">
+                        <label class="form-label font-weight-bold">Select Block</label>
+                        <select id="blockSelect" class="form-select">
+                            <option value="">-- Choose Block --</option>
+                            {% for block in blocks %}
+                                <option value="{{ block }}">{{ block }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Select Panchayat</label>
+                        <select id="panchayatSelect" class="form-select" disabled>
+                            <option value="">-- Select Block First --</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Select Crop</label>
+                        <select id="cropSelect" class="form-select">
+                            <option value="general">General Agriculture</option>
+                            <option value="paddy">Paddy (धान)</option>
+                            <option value="wheat">Wheat (गेहूँ)</option>
+                            <option value="maize">Maize (मक्का)</option>
+                        </select>
+                    </div>
+
+                    <button id="runBtn" class="btn btn-success w-100 fw-bold mb-2" disabled>
+                        Run High-Res Downscaling
+                    </button>
+                    <button id="pdfBtn" class="btn btn-outline-dark w-100 fw-semibold d-none mb-2" onclick="window.print()">
+                        📄 Download Agromet Bulletin (PDF)
+                    </button>
+                    <button id="smsBtn" class="btn btn-outline-primary w-100 fw-semibold d-none" onclick="sendSMSAlert()">
+                        📲 Send SMS Alert to Farmers
+                    </button>
+                </div>
+
+                <!-- Topographic Parameters Card -->
+                <div id="topoCard" class="card card-custom p-4 d-none mb-4 bg-white border-start border-4 border-info">
+                    <h6 class="fw-bold text-primary mb-2">Satellite & Topography Features (ML Parameters)</h6>
+                    <ul class="list-unstyled mb-0 small">
+                        <li>⛰️ <strong>Elevation:</strong> <span id="valElevation">--</span> m</li>
+                        <li>🌊 <strong>Waterbodies Distance:</strong> <span id="valWater">--</span> km</li>
+                        <li>🌿 <strong>Vegetation Index (NDVI):</strong> <span id="valNdvi">--</span></li>
+                        <li>💧 <strong>Soil Moisture:</strong> <span id="valSoil">--</span></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Right Visuals & Results Panel -->
+            <div class="col-md-8">
+                <div class="card card-custom p-3 mb-4">
+                    <div id="map"></div>
+                </div>
+
+                <!-- Comparison Row -->
+                <div id="resultsRow" class="row g-3 d-none mb-4">
+                    <div class="col-md-6">
+                        <div class="card card-custom p-3 border-start border-4 border-warning">
+                            <span class="badge bg-warning text-dark w-50 mb-2">Low-Res Block (10km)</span>
+                            <h6 class="text-muted">IMD Baseline Forecast</h6>
+                            <div class="d-flex justify-content-between align-items-center mt-2">
+                                <div>Temp: <span id="blockTemp" class="highlight-val text-dark">--</span> °C</div>
+                                <div>Rain: <span id="blockRain" class="highlight-val text-dark">--</span>%</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <div class="card card-custom p-3 border-start border-4 border-success">
+                            <span class="badge bg-success w-50 mb-2">High-Res Downscaled</span>
+                            <h6 class="text-muted">Panchayat Micro-Climate</h6>
+                            <div class="d-flex justify-content-between align-items-center mt-2">
+                                <div>Temp: <span id="pTemp" class="highlight-val text-success">--</span> °C</div>
+                                <div>Rain: <span id="pRain" class="highlight-val text-success">--</span>%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pest Risk Warning Engine -->
+                <div id="pestCard" class="card card-custom p-4 d-none mb-4">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="fw-bold text-dark mb-0">🐛 Pest & Disease Risk Assessment</h6>
+                        <span id="pestBadge" class="badge bg-danger">--</span>
+                    </div>
+                    <p id="pestMsg" class="mb-0 text-muted small"></p>
+                </div>
+
+                <!-- 7-Day Downscaled Weather Chart -->
+                <div id="chartCard" class="card card-custom p-4 d-none">
+                    <h6 class="fw-bold text-muted mb-3">7-Day Localized Weather Trend</h6>
+                    <canvas id="trendChart" height="110"></canvas>
+                </div>
+
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Ground Feedback Modal -->
+    <div class="modal fade" id="feedbackModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Farmer Ground Weather Observation</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="form-label">Is it raining in your Panchayat right now?</label>
+                    <select id="rainObs" class="form-select mb-3">
+                        <option value="no">No Rain / Normal</option>
+                        <option value="light">Light Drizzle</option>
+                        <option value="heavy">Heavy Rainfall</option>
+                    </select>
+                    <button class="btn btn-success w-100" onclick="submitFeedback()" data-bs-dismiss="modal">Submit Ground Observation</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Farmer Login Modal -->
+    <div class="modal fade" id="loginModal" tabindex="-1">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header bg-success text-white">
+            <h5 class="modal-title fw-bold">🌾 Farmer Portal Login</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body p-4">
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div class="mb-3">
+                  <label class="form-label fw-semibold">Farmer Mobile / User ID</label>
+                  <input type="text" class="form-control" id="farmerNameInput" placeholder="e.g. Ramesh Kumar / 9876543210" required>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label fw-semibold">Password / OTP</label>
+                  <input type="password" class="form-control" placeholder="••••••••" required>
+                </div>
+                <button type="submit" class="btn btn-success w-100 fw-bold">Login & Load Saved Location</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Leaflet JS & Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const db = {{ blocks|tojson }};
+        let latestData = null;
+        let chartInstance = null;
+        let currentMarker = null;
+        
+        // Leaflet Map Init
+        const map = L.map('map').setView([26.1209, 85.3647], 10);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        const blockSelect = document.getElementById('blockSelect');
+        const panchayatSelect = document.getElementById('panchayatSelect');
+        const runBtn = document.getElementById('runBtn');
+
+        blockSelect.addEventListener('change', function() {
+            const selectedBlock = this.value;
+            panchayatSelect.innerHTML = '<option value="">-- Choose Panchayat --</option>';
+            
+            if (selectedBlock && db[selectedBlock]) {
+                panchayatSelect.disabled = false;
+                Object.keys(db[selectedBlock]).forEach(p => {
+                    panchayatSelect.innerHTML += `<option value="${p}">${p}</option>`;
+                });
+            } else {
+                panchayatSelect.disabled = true;
+                runBtn.disabled = true;
+            }
+        });
+
+        panchayatSelect.addEventListener('change', function() {
+            runBtn.disabled = !this.value;
+        });
+
+        runBtn.addEventListener('click', function() {
+            fetch('/api/downscale', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    block: blockSelect.value, 
+                    panchayat: panchayatSelect.value,
+                    crop: document.getElementById('cropSelect').value 
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if(data.success) {
+                    latestData = data;
+                    renderData();
+                }
+            });
+        });
+
+        function renderData() {
+    if(!latestData) return;
+
+    // 1. Map ko Panchayat location par zoom karne ke liye coordinates (Muzaffarpur, Bihar area)
+    const lat = 26.1209;
+    const lng = 85.3647;
+
+    // Map ko auto-zoom karein (Zoom level 13)
+    map.setView([lat, lng], 13);
+
+    // Agar pehle se marker pada hai toh use hataayein
+    if (currentMarker) {
+        map.removeLayer(currentMarker);
+    }
+
+    // Naya Marker (Pin) map par lagayein
+    currentMarker = L.marker([lat, lng]).addTo(map)
+        .bindPopup(`<b>${latestData.panchayat}</b><br>High-Res Downscaled Target Zone`)
+        .openPopup();
+
+    // 2. Cards Display Logic
+    document.getElementById('resultsRow').classList.remove('d-none');
+    document.getElementById('topoCard').classList.remove('d-none');
+    document.getElementById('pestCard').classList.remove('d-none');
+    document.getElementById('chartCard').classList.remove('d-none');
+    document.getElementById('smsBtn').classList.remove('d-none');
+    document.getElementById('pdfBtn').classList.remove('d-none');
+
+    // Values Set Karein
+    document.getElementById('valElevation').innerText = latestData.elevation;
+    document.getElementById('valWater').innerText = latestData.dist_water;
+    document.getElementById('valNdvi').innerText = latestData.ndvi;
+    document.getElementById('valSoil').innerText = latestData.soil_moisture;
+
+    document.getElementById('blockTemp').innerText = latestData.block_temp;
+    document.getElementById('blockRain').innerText = latestData.block_rain;
+    document.getElementById('pTemp').innerText = latestData.panchayat_temp;
+    document.getElementById('pRain').innerText = latestData.panchayat_rain;
+
+    const pestBadge = document.getElementById('pestBadge');
+    pestBadge.className = `badge bg-${latestData.pest_badge}`;
+    pestBadge.innerText = latestData.pest_level;
+    document.getElementById('pestMsg').innerText = latestData.pest_msg;
+
+    renderChart(latestData.trend_days, latestData.temp_trend, latestData.rain_trend);
+}
+
+        function renderChart(labels, temp, rain) {
+            const ctx = document.getElementById('trendChart').getContext('2d');
+            if(chartInstance) chartInstance.destroy();
+
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'Temperature (°C)', data: temp, borderColor: '#d9534f', backgroundColor: 'rgba(217,83,79,0.1)', fill: true, yAxisID: 'y' },
+                        { label: 'Rainfall Probability (%)', data: rain, borderColor: '#0275d8', backgroundColor: 'rgba(2,117,216,0.1)', fill: true, yAxisID: 'y1' }
+                    ]
+                },
+                options: {
+                    scales: {
+                        y: { type: 'linear', position: 'left' },
+                        y1: { type: 'linear', position: 'right', min: 0, max: 100 }
+                    }
+                }
+            });
+        }
+
+        function sendSMSAlert() {
+            alert('📲 Broadcast Sent: SMS advisory sent to registered farmers in ' + latestData.panchayat);
+        }
+
+        function submitFeedback() {
+            alert('✅ Observation Recorded! Thank you for validating local weather data.');
+        }
+        function handleLogin(event) {
+    event.preventDefault();
+    const farmerName = document.getElementById('farmerNameInput').value || 'Farmer';
+    
+    // Modal Hide karein
+    const loginModalEl = document.getElementById('loginModal');
+    const modal = bootstrap.Modal.getInstance(loginModalEl);
+    if (modal) {
+        modal.hide();
+    }
+
+    // Navbar Button Update
+    const loginBtn = document.getElementById('userLoginBtn');
+    if (loginBtn) {
+        loginBtn.className = "btn btn-warning btn-sm fw-bold text-dark";
+        loginBtn.innerHTML = `👨‍🌾 Welcome, ${farmerName}`;
+    }
+    
+    alert(`Welcome ${farmerName}! Your saved profile location has been loaded.`);
+}
+    </script>
+</body>
+</html>
